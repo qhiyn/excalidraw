@@ -7,7 +7,6 @@ import { isExcalidrawPlusSignedUser } from "../app_constants";
 
 import { DebugFooter, isVisualDebuggerEnabled } from "./DebugCanvas";
 import { EncryptedIcon } from "./EncryptedIcon";
-import { SheetManager } from "./SheetManager";
 
 export const AppFooter = React.memo(
   ({
@@ -32,7 +31,6 @@ export const AppFooter = React.memo(
           {isVisualDebuggerEnabled() && <DebugFooter onChange={onChange} />}
           {!isExcalidrawPlusSignedUser && <EncryptedIcon />}
         </div>
-        {excalidrawAPI && <SheetManager excalidrawAPI={excalidrawAPI} />}
       </Footer>
     );
   },

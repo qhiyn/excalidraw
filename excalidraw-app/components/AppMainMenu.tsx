@@ -15,6 +15,7 @@ import { LanguageList } from "../app-language/LanguageList";
 import { isExcalidrawPlusSignedUser } from "../app_constants";
 
 import { saveDebugState } from "./DebugCanvas";
+import { GridIcon } from "./Workspace/icons";
 
 export const AppMainMenu: React.FC<{
   onCollabDialogOpen: () => any;
@@ -22,10 +23,22 @@ export const AppMainMenu: React.FC<{
   isCollabEnabled: boolean;
   theme: Theme | "system";
   refresh: () => void;
+  onBackToGallery?: () => void;
 }> = React.memo((props) => {
   const { t } = useI18n();
   return (
     <MainMenu>
+      {props.onBackToGallery && (
+        <>
+          <MainMenu.Item
+            icon={<GridIcon size={16} />}
+            onSelect={props.onBackToGallery}
+          >
+            All Sessions
+          </MainMenu.Item>
+          <MainMenu.Separator />
+        </>
+      )}
       <MainMenu.DefaultItems.LoadScene />
       <MainMenu.DefaultItems.SaveToActiveFile />
       <MainMenu.DefaultItems.Export />

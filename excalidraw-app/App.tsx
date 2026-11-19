@@ -7,6 +7,7 @@ import {
   useEditorInterface,
   ExcalidrawAPIProvider,
   useExcalidrawAPI,
+  THEME,
 } from "@excalidraw/excalidraw";
 import { trackEvent } from "@excalidraw/excalidraw/analytics";
 import { getDefaultAppState } from "@excalidraw/excalidraw/appState";
@@ -119,7 +120,25 @@ import {
 import { updateStaleImageStatuses } from "./data/FileManager";
 import { FileStatusStore } from "./data/fileStatusStore";
 import { importUsernameFromLocalStorage } from "./data/localStorage";
-import { loadActiveSheetScene, getAllSheetsFileIds } from "./data/sheetStorage";
+import { getAllSheetsFileIds } from "./data/sheetStorage";
+import {
+  loadActiveSessionScene,
+  getAllSessionsFileIds,
+  initializeSessions,
+  getSessionsIndex,
+  saveSessionsIndex,
+  saveSessionData,
+  saveSessionThumb,
+  getSessionData,
+  getSessionThumb,
+  deleteSessionData,
+  generateSessionThumbnail,
+  getNextSessionTitle,
+  getDuplicateSessionTitle,
+  type SessionsIndex,
+  type SessionMetadata,
+} from "./data/sessionStorage";
+import { SessionGallery, WorkspacePill } from "./components/Workspace";
 
 import { loadFilesFromFirebase } from "./data/firebase";
 import {
@@ -229,7 +248,7 @@ const initializeScene = async (opts: {
   );
   const externalUrlMatch = window.location.hash.match(/^#url=(.*)$/);
 
-  const localDataState = await loadActiveSheetScene();
+  const localDataState = await loadActiveSessionScene();
 
   let scene: Omit<
     RestoredDataState,
@@ -383,6 +402,20 @@ const ExcalidrawWrapper = () => {
 
   const editorInterface = useEditorInterface();
 
+  const [sessionsIndex, setSessionsIndex] = useState<SessionsIndex | null>(() =>
+    getSessionsIndex(),
+  );
+  const [activeSessionId, setActiveSessionId] = useState<string | null>(
+    () => getSessionsIndex()?.activeSessionId ?? null,
+  );
+
+  useEffect(() => {
+    initializeSessions().then((index) => {
+      setSessionsIndex(index);
+      setActiveSessionId(index.activeSessionId);
+    });
+  }, []);
+
   // initial state
   // ---------------------------------------------------------------------------
 
@@ -393,6 +426,195 @@ const ExcalidrawWrapper = () => {
     initialStatePromiseRef.current.promise =
       resolvablePromise<ExcalidrawInitialDataState | null>();
   }
+
+  const previousSessionIdRef = useRef<string | null>(activeSessionId);
+  if (previousSessionIdRef.current !== activeSessionId) {
+    previousSessionIdRef.current = activeSessionId;
+    initialStatePromiseRef.current.promise =
+      resolvablePromise<ExcalidrawInitialDataState | null>();
+  }
+
+  const isExternalScene = useMemo(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const id = searchParams.get("id");
+    const jsonBackendMatch = window.location.hash.match(
+      /^#json=([a-zA-Z0-9_-]+),([a-zA-Z0-9_-]+)$/,
+    );
+    const externalUrlMatch = window.location.hash.match(/^#url=(.*)$/);
+    const roomLinkData = getCollaborationLinkData(window.location.href);
+    return Boolean(id || jsonBackendMatch || externalUrlMatch || roomLinkData);
+  }, []);
+
+  const handleCreateSession = useCallback(async () => {
+    const index = getSessionsIndex() || {
+      activeSessionId: null,
+      sessions: [],
+    };
+    const newId = `session_${Date.now()}_${Math.random()
+      .toString(36)
+      .substring(2, 9)}`;
+    const title = getNextSessionTitle(index.sessions);
+    const now = Date.now();
+    const newSession: SessionMetadata = {
+      id: newId,
+      title,
+      createdAt: now,
+      updatedAt: now,
+    };
+    await saveSessionData(newId, {
+      elements: [],
+      appState: {},
+    });
+    await saveSessionThumb(newId, null);
+    const newIndex: SessionsIndex = {
+      activeSessionId: newId,
+      sessions: [newSession, ...index.sessions],
+    };
+    saveSessionsIndex(newIndex);
+    setSessionsIndex(newIndex);
+    setActiveSessionId(newId);
+  }, []);
+
+  const handleOpenSession = useCallback((sessionId: string) => {
+    const index = getSessionsIndex() || {
+      activeSessionId: null,
+      sessions: [],
+    };
+    const newIndex: SessionsIndex = {
+      ...index,
+      activeSessionId: sessionId,
+    };
+    saveSessionsIndex(newIndex);
+    setSessionsIndex(newIndex);
+    setActiveSessionId(sessionId);
+  }, []);
+
+  const handleBackToGallery = useCallback(async () => {
+    LocalData.flushSave();
+
+    const currentId = activeSessionId;
+    if (currentId && excalidrawAPI) {
+      const elements = excalidrawAPI.getSceneElementsIncludingDeleted();
+      const appState = excalidrawAPI.getAppState();
+      const files = excalidrawAPI.getFiles();
+
+      await saveSessionData(currentId, {
+        elements,
+        appState,
+      });
+
+      const thumb = await generateSessionThumbnail(elements, appState, files);
+      await saveSessionThumb(currentId, thumb);
+    }
+
+    if (window.location.hash) {
+      window.history.pushState(null, "", window.location.pathname);
+    }
+
+    const index = getSessionsIndex() || {
+      activeSessionId: null,
+      sessions: [],
+    };
+    const newIndex: SessionsIndex = {
+      ...index,
+      activeSessionId: null,
+    };
+    saveSessionsIndex(newIndex);
+    setSessionsIndex(newIndex);
+    setActiveSessionId(null);
+  }, [activeSessionId, excalidrawAPI]);
+
+  const handleRenameSession = useCallback(
+    (sessionId: string, newTitle: string) => {
+      const trimmed = newTitle.trim();
+      if (!trimmed) {
+        return;
+      }
+      const index = getSessionsIndex() || {
+        activeSessionId: null,
+        sessions: [],
+      };
+      const updatedSessions = index.sessions.map((s) =>
+        s.id === sessionId
+          ? { ...s, title: trimmed, updatedAt: Date.now() }
+          : s,
+      );
+      const newIndex: SessionsIndex = {
+        ...index,
+        sessions: updatedSessions,
+      };
+      saveSessionsIndex(newIndex);
+      setSessionsIndex(newIndex);
+    },
+    [],
+  );
+
+  const handleDuplicateSession = useCallback(async (sessionId: string) => {
+    const index = getSessionsIndex() || {
+      activeSessionId: null,
+      sessions: [],
+    };
+    const session = index.sessions.find((s) => s.id === sessionId);
+    if (!session) {
+      return;
+    }
+
+    const newId = `session_${Date.now()}_${Math.random()
+      .toString(36)
+      .substring(2, 9)}`;
+    const newTitle = getDuplicateSessionTitle(session.title, index.sessions);
+    const now = Date.now();
+    const newSession: SessionMetadata = {
+      id: newId,
+      title: newTitle,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const originalData = await getSessionData(sessionId);
+    if (originalData) {
+      await saveSessionData(newId, {
+        elements: originalData.elements || [],
+        appState: originalData.appState || {},
+      });
+    }
+
+    const originalThumb = await getSessionThumb(sessionId);
+    if (originalThumb) {
+      await saveSessionThumb(newId, originalThumb);
+    }
+
+    const sessionIdx = index.sessions.findIndex((s) => s.id === sessionId);
+    const updatedSessions = [...index.sessions];
+    updatedSessions.splice(sessionIdx + 1, 0, newSession);
+
+    const newIndex: SessionsIndex = {
+      ...index,
+      sessions: updatedSessions,
+    };
+    saveSessionsIndex(newIndex);
+    setSessionsIndex(newIndex);
+  }, []);
+
+  const handleDeleteSession = useCallback(async (sessionId: string) => {
+    await deleteSessionData(sessionId);
+    const index = getSessionsIndex() || {
+      activeSessionId: null,
+      sessions: [],
+    };
+    const updatedSessions = index.sessions.filter((s) => s.id !== sessionId);
+    const newIndex: SessionsIndex = {
+      ...index,
+      activeSessionId:
+        index.activeSessionId === sessionId ? null : index.activeSessionId,
+      sessions: updatedSessions,
+    };
+    saveSessionsIndex(newIndex);
+    setSessionsIndex(newIndex);
+    if (index.activeSessionId === sessionId) {
+      setActiveSessionId(null);
+    }
+  }, []);
 
   const debugCanvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -546,15 +768,21 @@ const ExcalidrawWrapper = () => {
               });
           }
           // on fresh load, clear unused files from IDB (from previous
-          // session, preserving all sheets' files)
-          getAllSheetsFileIds().then((allSheetsFileIds) => {
-            const combinedFileIds = Array.from(
-              new Set([...fileIds, ...allSheetsFileIds]),
-            );
-            LocalData.fileStorage.clearObsoleteFiles({
-              currentFileIds: combinedFileIds,
-            });
-          });
+          // session, preserving all sessions' and sheets' files)
+          Promise.all([getAllSessionsFileIds(), getAllSheetsFileIds()]).then(
+            ([allSessionsFileIds, allSheetsFileIds]) => {
+              const combinedFileIds = Array.from(
+                new Set([
+                  ...fileIds,
+                  ...allSessionsFileIds,
+                  ...allSheetsFileIds,
+                ]),
+              );
+              LocalData.fileStorage.clearObsoleteFiles({
+                currentFileIds: combinedFileIds,
+              });
+            },
+          );
         }
       }
     },
@@ -608,7 +836,7 @@ const ExcalidrawWrapper = () => {
       ) {
         // don't sync if local state is newer or identical to browser state
         if (isBrowserStorageStateNewer(STORAGE_KEYS.VERSION_DATA_STATE)) {
-          loadActiveSheetScene().then((localDataState) => {
+          loadActiveSessionScene().then((localDataState) => {
             const username = importUsernameFromLocalStorage();
             setLangCode(getPreferredLanguage());
             excalidrawAPI.updateScene({
@@ -951,6 +1179,36 @@ const ExcalidrawWrapper = () => {
     },
   };
 
+  const isDashboardView =
+    !isExternalScene &&
+    activeSessionId === null &&
+    (!isTestEnv() ||
+      localStorage.getItem("excalidraw-test-view") === "gallery");
+
+  if (isDashboardView) {
+    return (
+      <div
+        style={{ height: "100%", width: "100%" }}
+        className={clsx("excalidraw", "excalidraw-app", {
+          "theme--dark": editorTheme === THEME.DARK,
+        })}
+      >
+        <SessionGallery
+          sessions={sessionsIndex?.sessions || []}
+          theme={editorTheme}
+          onToggleTheme={() =>
+            setAppTheme(editorTheme === THEME.DARK ? THEME.LIGHT : THEME.DARK)
+          }
+          onCreateSession={handleCreateSession}
+          onOpenSession={handleOpenSession}
+          onRenameSession={handleRenameSession}
+          onDuplicateSession={handleDuplicateSession}
+          onDeleteSession={handleDeleteSession}
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       style={{ height: "100%" }}
@@ -959,6 +1217,7 @@ const ExcalidrawWrapper = () => {
       })}
     >
       <Excalidraw
+        key={activeSessionId || "external"}
         viewportStatusFrame={viewportStatusFrame}
         userToFollow={userToFollow}
         onChange={onChange}
@@ -966,6 +1225,23 @@ const ExcalidrawWrapper = () => {
         initialData={initialStatePromiseRef.current.promise}
         isCollaborating={isCollaborating}
         onPointerUpdate={collabAPI?.onPointerUpdate}
+        renderTopLeftUI={(isMobile, appState) => {
+          if (appState.zenModeEnabled) {
+            return null;
+          }
+          return (
+            <WorkspacePill
+              activeSessionId={activeSessionId}
+              sessions={sessionsIndex?.sessions || []}
+              onUpdateTitle={(newTitle) => {
+                if (activeSessionId) {
+                  handleRenameSession(activeSessionId, newTitle);
+                }
+              }}
+              onBackToGallery={handleBackToGallery}
+            />
+          );
+        }}
         UIOptions={{
           canvasActions: {
             toggleTheme: true,
@@ -1046,6 +1322,7 @@ const ExcalidrawWrapper = () => {
           isCollabEnabled={isCollabAvailable}
           theme={appTheme}
           refresh={() => forceRefresh((prev) => !prev)}
+          onBackToGallery={handleBackToGallery}
         />
         <AppWelcomeScreen
           onCollabDialogOpen={onCollabDialogOpen}

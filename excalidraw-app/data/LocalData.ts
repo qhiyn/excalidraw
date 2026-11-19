@@ -46,6 +46,7 @@ import { FileStatusStore } from "./fileStatusStore";
 import { Locker } from "./Locker";
 import { updateBrowserStateVersion } from "./tabSync";
 import { saveActiveSheetDataToIndexedDB } from "./sheetStorage";
+import { saveActiveSessionDataToIndexedDB } from "./sessionStorage";
 
 const filesStore = createStore("files-db", "files-store");
 
@@ -131,6 +132,7 @@ export class LocalData {
       onFilesSaved: () => void,
     ) => {
       saveDataStateToLocalStorage(elements, appState);
+      saveActiveSessionDataToIndexedDB(elements, appState, files);
       saveActiveSheetDataToIndexedDB(elements, appState);
 
       await this.fileStorage.saveFiles({
